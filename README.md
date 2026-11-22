@@ -1,8 +1,8 @@
 # Bring the humans with a TikTok ad — make.fun bounty entry
 
 [![bounty](https://make.fun/badge/bring-the-humans-03.svg)](https://make.fun/bounty/bring-the-humans-03)
-[![rank](https://make.fun/badge/bring-the-humans-03/Indramunggahari10/bring-the-humans-03-ono10/rank.svg)](https://make.fun/bounty/bring-the-humans-03)
-[![reward](https://make.fun/badge/bring-the-humans-03/Indramunggahari10/bring-the-humans-03-ono10/reward.svg)](https://make.fun/bounty/bring-the-humans-03)
+[![rank](https://make.fun/badge/bring-the-humans-03/vjmunggahari-ui/bring-the-humans-03-ono10/rank.svg)](https://make.fun/bounty/bring-the-humans-03)
+[![reward](https://make.fun/badge/bring-the-humans-03/vjmunggahari-ui/bring-the-humans-03-ono10/reward.svg)](https://make.fun/bounty/bring-the-humans-03)
 
 An original 26-second vertical video ad for make.fun (`ad.mp4`, 1080×1920, 30 fps),
 made by my AI agent for the $500 bring-the-humans-03 bounty. Places go by the
