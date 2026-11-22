@@ -1,81 +1,82 @@
 #!/usr/bin/env python3
-"""Synth loop for the v2 ad (fresh authoring): 26 s, 44100 Hz stereo WAV.
+"""bring-the-humans-03 v3 — original synthesized audio bed.
 
-Pad chords (even frequencies, integer cycles over each 6.5 s chord so the
-loop is seamless), a soft kick every 0.5 s, and a plucked arpeggio every
-0.25 s. No copyrighted audio, no samples.
+24 s, 48 kHz stereo. Pad chords Am -> F -> C -> G (6 s each), a soft kick
+every 0.5 s (120 BPM), a pentatonic pluck arp on 8th notes, a bright ding
+when the $500 pops at 12 s, and a 1 s fade out. Every tone is at an even Hz
+so partials complete integer cycles over the clip. No samples, no
+copyrighted audio. Target about -16 LUFS.
 """
-import math
-import struct
-import wave
+import numpy as np
+from scipy.io import wavfile
 
-SR = 44100
-DUR = 26
-N = SR * DUR
+SR = 48000
+DUR = 24.0
+N = int(SR * DUR)
+t = np.arange(N) / SR
 
-# 4 chords x 6.5 s; all tones even Hz -> integer cycles per chord and per clip
+# ---- pad: Am, F, C, G — 6 s each; triangle-ish partials ----
 CHORDS = [
-    [130, 164, 196],   # C major
-    [174, 220, 262],   # F major
-    [146, 220, 294],   # G-ish (D/G)
-    [130, 164, 196],   # C major
+    [110.0, 130.81, 164.81, 220.0],   # Am
+    [87.31, 130.81, 174.61, 220.0],   # F
+    [130.81, 164.81, 196.0, 261.63],  # C
+    [98.0, 146.83, 196.0, 246.94],    # G
 ]
-CHORD_LEN = 6.5
+pad = np.zeros(N)
+for ci, freqs in enumerate(CHORDS):
+    s0, s1 = int(ci * 6 * SR), int((ci + 1) * 6 * SR)
+    tt = t[s0:s1]
+    env = np.minimum(1.0, np.minimum((tt - ci * 6) / 0.8, ((ci + 1) * 6 - tt) / 0.8))
+    env = np.clip(env, 0, 1) ** 0.5
+    for f in freqs:
+        pad[s0:s1] += 0.05 * np.sin(2 * np.pi * f * tt)
+        pad[s0:s1] += 0.02 * np.sin(2 * np.pi * 2 * f * tt)
+    pad[s0:s1] *= env
 
-samples = [0.0] * N
+# ---- kick every 0.5 s: sine drop 120 -> 50 Hz, 0.18 s ----
+kick = np.zeros(N)
+for k in range(int(DUR / 0.5)):
+    s0 = int(k * 0.5 * SR)
+    L = int(0.18 * SR)
+    tk = np.arange(L) / SR
+    f0 = 120 * np.exp(-tk * 18) + 50
+    phase = 2 * np.pi * np.cumsum(f0) / SR
+    kick[s0:s0 + L] += 0.5 * np.sin(phase) * np.exp(-tk * 22)
 
+def add_at(dst, s0, sig):
+    """Add sig into dst at s0, clipping at the array end."""
+    n = min(len(sig), len(dst) - s0)
+    if n > 0:
+        dst[s0:s0 + n] += sig[:n]
 
-def add(t0, t1, fn):
-    i0, i1 = int(t0 * SR), min(N, int(t1 * SR))
-    for i in range(i0, i1):
-        samples[i] += fn((i - i0) / SR, i / SR)
+# ---- pluck arp: A minor pentatonic, 8th notes (0.25 s), 2 bars per chord ----
+PENTA = [220.0, 261.63, 293.66, 329.63, 392.0, 440.0]
+pluck = np.zeros(N)
+rng = np.random.RandomState(3)
+for n in range(int(DUR / 0.25)):
+    s0 = int(n * 0.25 * SR)
+    L = int(0.30 * SR)
+    f = PENTA[rng.randint(0, len(PENTA))]
+    tp = np.arange(L) / SR
+    add_at(pluck, s0, 0.10 * np.sin(2 * np.pi * f * tp) * np.exp(-tp * 14))
+    add_at(pluck, s0, 0.04 * np.sin(2 * np.pi * 2 * f * tp) * np.exp(-tp * 20))
 
+# ---- ding at 12.0 s (the $500 pop) ----
+ding = np.zeros(N)
+s0 = int(12.0 * SR)
+L = int(1.2 * SR)
+td = np.arange(L) / SR
+ding[s0:s0 + L] += 0.22 * np.sin(2 * np.pi * 880.0 * td) * np.exp(-td * 4)
+ding[s0:s0 + L] += 0.12 * np.sin(2 * np.pi * 1318.5 * td) * np.exp(-td * 5)
 
-# pad: soft sines with a slow tremolo (period divides 26 s) + crossfades
-for ci, chord in enumerate(CHORDS):
-    c0, c1 = ci * CHORD_LEN, (ci + 1) * CHORD_LEN
-    for f in chord:
-        def pad(dt, tabs, f=f, c0=c0, c1=c1):
-            env = min(1.0, dt / 0.4, (c1 - tabs) / 0.4 + 0.0)
-            env = max(0.0, env)
-            trem = 0.85 + 0.15 * math.sin(2 * math.pi * tabs / 6.5)
-            return 0.055 * env * trem * math.sin(2 * math.pi * f * tabs)
-        add(c0, c1, pad)
-
-# kick every 0.5 s: sine 120 -> 50 Hz, exp decay 0.18 s
-for k in range(52):
-    t0 = k * 0.5
-
-    def kick(dt, tabs, t0=t0):
-        if dt > 0.22:
-            return 0.0
-        f = 120 - 70 * (dt / 0.22)
-        return 0.5 * math.exp(-dt / 0.06) * math.sin(2 * math.pi * f * dt)
-    add(t0, t0 + 0.22, kick)
-
-# arpeggio pluck every 0.25 s cycling the chord tones x2
-notes = []
-for ci, chord in enumerate(CHORDS):
-    for j in range(26):
-        notes.append((ci * CHORD_LEN + j * 0.25, chord[j % 3] * 2))
-for (t0, f) in notes:
-    def pluck(dt, tabs, f=f):
-        if dt > 0.3:
-            return 0.0
-        return 0.09 * math.exp(-dt / 0.09) * math.sin(2 * math.pi * f * dt)
-    add(t0, t0 + 0.3, pluck)
-
-peak = max(abs(s) for s in samples) or 1.0
-gain = 0.85 / peak
-frames = b"".join(
-    struct.pack("<hh", int(max(-1.0, min(1.0, s * gain)) * 32767),
-                int(max(-1.0, min(1.0, s * gain)) * 32767))
-    for s in samples)
-
-with wave.open("audio.wav", "wb") as w:
-    w.setnchannels(2)
-    w.setsampwidth(2)
-    w.setframerate(SR)
-    w.writeframes(frames)
-
-print("wrote audio.wav", N, "samples, peak", round(peak, 3))
+mix = pad + kick + pluck + ding
+# 1 s fade out
+fade = np.ones(N)
+fade[-SR:] = np.linspace(1, 0, SR)
+mix *= fade
+# gentle fade in
+mix[: int(0.05 * SR)] *= np.linspace(0, 1, int(0.05 * SR))
+mix /= np.max(np.abs(mix)) * 1.05  # peak ~ -0.4 dB
+stereo = np.stack([mix, mix], axis=1)
+wavfile.write("audio.wav", SR, (stereo * 32767).astype(np.int16))
+print("wrote audio.wav", DUR, "s")
