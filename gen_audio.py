@@ -1,87 +1,81 @@
 #!/usr/bin/env python3
-"""Synthesize a punchy 26-second backing track for the make.fun TikTok ad.
+"""Synth loop for the v2 ad (fresh authoring): 26 s, 44100 Hz stereo WAV.
 
-120 BPM, 4-on-the-floor kick, offbeat hats, a driving bassline and a
-bright pluck arp. Written from scratch with numpy; no samples, no
-copyrighted material. Deterministic output: same bytes every run.
+Pad chords (even frequencies, integer cycles over each 6.5 s chord so the
+loop is seamless), a soft kick every 0.5 s, and a plucked arpeggio every
+0.25 s. No copyrighted audio, no samples.
 """
-import numpy as np
+import math
+import struct
+import wave
 
-SR = 48000
-DUR = 26.0
-N = int(SR * DUR)
-t = np.arange(N, dtype=np.float64) / SR
-mix = np.zeros(N, dtype=np.float64)
+SR = 44100
+DUR = 26
+N = SR * DUR
 
-# --- kick: every 0.5 s, sine dropping 130 -> 45 Hz, fast decay ---
-for start in np.arange(0, DUR, 0.5):
-    i0 = int(start * SR)
-    ln = int(0.28 * SR)
-    i1 = min(N, i0 + ln)
-    tt = np.arange(i1 - i0, dtype=np.float64) / SR
-    freq = 130.0 * np.exp(-tt * 22.0) + 45.0
-    phase = 2 * np.pi * np.cumsum(freq) / SR
-    env = np.exp(-tt * 26.0)
-    mix[i0:i1] += 0.9 * np.sin(phase) * env
+# 4 chords x 6.5 s; all tones even Hz -> integer cycles per chord and per clip
+CHORDS = [
+    [130, 164, 196],   # C major
+    [174, 220, 262],   # F major
+    [146, 220, 294],   # G-ish (D/G)
+    [130, 164, 196],   # C major
+]
+CHORD_LEN = 6.5
 
-# --- hats: offbeats, short noise bursts ---
-rng = np.random.default_rng(7)
-for start in np.arange(0.25, DUR, 0.5):
-    i0 = int(start * SR)
-    ln = int(0.05 * SR)
-    i1 = min(N, i0 + ln)
-    noise = rng.standard_normal(i1 - i0)
-    # crude high-pass: first difference
-    noise = np.diff(noise, prepend=noise[0])
-    tt = np.arange(i1 - i0, dtype=np.float64) / SR
-    mix[i0:i1] += 0.16 * noise * np.exp(-tt * 160.0)
+samples = [0.0] * N
 
-# --- bassline: one note per beat, A1 A1 C2 G1 cycling, soft square ---
-notes = [55.0, 55.0, 65.41, 49.0]
-for b, start in enumerate(np.arange(0, DUR, 0.5)):
-    f = notes[b % 4]
-    i0 = int(start * SR)
-    ln = int(0.44 * SR)
-    i1 = min(N, i0 + ln)
-    tt = np.arange(i1 - i0, dtype=np.float64) / SR
-    wave = np.tanh(2.2 * np.sin(2 * np.pi * f * tt))
-    mix[i0:i1] += 0.34 * wave * np.exp(-tt * 5.0)
 
-# --- pluck arp: bright sine plucks on the "and" of beats 2 and 4 ---
-arp = [659.25, 783.99, 880.0, 1046.5]
-for bar in range(int(DUR // 2)):
-    for k, off in enumerate((1.0, 1.5)):
-        start = bar * 2.0 + off
-        if start >= DUR - 0.4:
-            continue
-        f = arp[(bar + k) % 4]
-        i0 = int(start * SR)
-        ln = int(0.32 * SR)
-        i1 = min(N, i0 + ln)
-        tt = np.arange(i1 - i0, dtype=np.float64) / SR
-        mix[i0:i1] += 0.13 * np.sin(2 * np.pi * f * tt) * np.exp(-tt * 14.0)
+def add(t0, t1, fn):
+    i0, i1 = int(t0 * SR), min(N, int(t1 * SR))
+    for i in range(i0, i1):
+        samples[i] += fn((i - i0) / SR, i / SR)
 
-# --- master: fade out last 0.6 s, normalize to -3 dBFS ---
-fade = np.ones(N)
-fl = int(0.6 * SR)
-fade[-fl:] = np.linspace(1.0, 0.0, fl)
-mix *= fade
-peak = np.max(np.abs(mix))
-mix *= 0.7079 / peak
-stereo = np.stack([mix, mix], axis=1)
-pcm = np.clip(stereo * 32767, -32768, 32767).astype('<i2')
-with open('audio.wav', 'wb') as fh:
-    fh.write(b'RIFF')
-    fh.write((36 + pcm.nbytes).to_bytes(4, 'little'))
-    fh.write(b'WAVEfmt ')
-    fh.write((16).to_bytes(4, 'little'))
-    fh.write((1).to_bytes(2, 'little'))          # PCM
-    fh.write((2).to_bytes(2, 'little'))          # stereo
-    fh.write((SR).to_bytes(4, 'little'))
-    fh.write((SR * 4).to_bytes(4, 'little'))     # byte rate
-    fh.write((4).to_bytes(2, 'little'))          # block align
-    fh.write((16).to_bytes(2, 'little'))         # bits
-    fh.write(b'data')
-    fh.write(pcm.nbytes.to_bytes(4, 'little'))
-    fh.write(pcm.tobytes())
-print('wrote audio.wav', pcm.nbytes, 'bytes, peak-normalized')
+
+# pad: soft sines with a slow tremolo (period divides 26 s) + crossfades
+for ci, chord in enumerate(CHORDS):
+    c0, c1 = ci * CHORD_LEN, (ci + 1) * CHORD_LEN
+    for f in chord:
+        def pad(dt, tabs, f=f, c0=c0, c1=c1):
+            env = min(1.0, dt / 0.4, (c1 - tabs) / 0.4 + 0.0)
+            env = max(0.0, env)
+            trem = 0.85 + 0.15 * math.sin(2 * math.pi * tabs / 6.5)
+            return 0.055 * env * trem * math.sin(2 * math.pi * f * tabs)
+        add(c0, c1, pad)
+
+# kick every 0.5 s: sine 120 -> 50 Hz, exp decay 0.18 s
+for k in range(52):
+    t0 = k * 0.5
+
+    def kick(dt, tabs, t0=t0):
+        if dt > 0.22:
+            return 0.0
+        f = 120 - 70 * (dt / 0.22)
+        return 0.5 * math.exp(-dt / 0.06) * math.sin(2 * math.pi * f * dt)
+    add(t0, t0 + 0.22, kick)
+
+# arpeggio pluck every 0.25 s cycling the chord tones x2
+notes = []
+for ci, chord in enumerate(CHORDS):
+    for j in range(26):
+        notes.append((ci * CHORD_LEN + j * 0.25, chord[j % 3] * 2))
+for (t0, f) in notes:
+    def pluck(dt, tabs, f=f):
+        if dt > 0.3:
+            return 0.0
+        return 0.09 * math.exp(-dt / 0.09) * math.sin(2 * math.pi * f * dt)
+    add(t0, t0 + 0.3, pluck)
+
+peak = max(abs(s) for s in samples) or 1.0
+gain = 0.85 / peak
+frames = b"".join(
+    struct.pack("<hh", int(max(-1.0, min(1.0, s * gain)) * 32767),
+                int(max(-1.0, min(1.0, s * gain)) * 32767))
+    for s in samples)
+
+with wave.open("audio.wav", "wb") as w:
+    w.setnchannels(2)
+    w.setsampwidth(2)
+    w.setframerate(SR)
+    w.writeframes(frames)
+
+print("wrote audio.wav", N, "samples, peak", round(peak, 3))
